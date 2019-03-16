@@ -27,7 +27,7 @@ def setup(self):
     
     # Fixed length FIFO queues to avoid repeating the same actions
     self.bomb_history = deque([], 5)
-    self.coordinate_history = deque([], 20)
+    self.coordinate_history = deque([], 5)
     
     self.update = 5                             # 'move': SARSA update every move or int n: n-step SARSA update after every episode
     self.state_hist = deque([],s.max_steps)     # state history, needed for SARSA learning
@@ -71,7 +71,7 @@ def act(self):
     # Gather information about the game state
     arena = self.game_state['arena']
     x, y, _, bombs_left, score = self.game_state['self']
-    self.coordinate_history.append([x,y])
+    self.coordinate_history.append((x,y))
     bombs = self.game_state['bombs']
     bomb_xys = [(x,y) for (x,y,t) in bombs]
     others = [(x,y) for (x,y,n,b,s) in self.game_state['others']]
@@ -82,7 +82,7 @@ def act(self):
             if (0 < i < bomb_map.shape[0]) and (0 < j < bomb_map.shape[1]):
                 bomb_map[i,j] = min(bomb_map[i,j], t)
     self.bomb_map = bomb_map
-    self.state = [self.game_state, self.coordinate_history, bomb_map] 
+    self.state = [(self.game_state).copy(), list(self.coordinate_history), bomb_map.copy()] 
 
     
     # Check which moves make sense at all
@@ -224,14 +224,18 @@ def funcs(self, state, action):
     if len(coins) != 0:
         dist = np.min(distance(me, coins))
         dist_next = np.min(distance(me_next, coins))
-        f[0] = .2*np.sign(dist-dist_next)    
+        f[0] = .2*np.sign(dist-dist_next)
+        f[9] = 1./max(dist,1)   # avoid division by zero
+        
     
     # when in doubt: rather do something than nothing
     f[1] = -.2 if action=='WAIT' or action=='BOMB' else 0
     
     #try not to stay on one place
+    self.logger.debug(f'me={me},me_next={me_next},coord_hist={coordinate_history}')
     if me_next in list(coordinate_history):
-        f[2] = -1*(2 - .1*list(coordinate_history)[::-1].index(me_next))
+        f[2] = -1*(1. - list(coordinate_history)[::-1].index(me_next)/len(coordinate_history))
+        #self.logger.debug(f'found me_next in coordinate_history at pos. {list(coordinate_history)[::-1].index(me_next)}')
     else: 
         f[2] = 0.
     
@@ -242,7 +246,7 @@ def funcs(self, state, action):
         f[3] = .2*np.sign(dist-dist_next)   
     
     # it might be a good idea to drop a bomb if many crates would be destroyed
-    if action == 'BOMB':
+    if action == 'BOMB' and len(crates) != 0:
         expl_x,expl_y = get_explosion_xys(me, arena, s.bomb_power).T    # get coordinates of explosion for bomb dropped at (me)
         f[4] = .02 * len(np.where(arena[expl_x,expl_y]==1)[0])           # for each crate that would be destroyed, reward 0.2
         
@@ -273,7 +277,9 @@ def funcs(self, state, action):
         for p in [(min(x+2,16),y), (max(x-2,0),y),(x,min(y+2,16)),(x,max(y-2,0)),(x+1,y+1),(x+1,y-1),(x-1,y+1),(x+1,y-1)]:
             if p in others:
                 f[8] += 0.25
-        
+    
+    ## higher order correclations:
+    
 
     self.logger.debug(f'f={f}')
     return f
@@ -341,7 +347,7 @@ def reward_update(self):
                 self.logger.debug('-------- ERROR: INVALID ACTION ----------- this should not happen!')
                 self.logger.debug(f'{self.last_map}\n{self.last_bmap}\nme = {self.me}')
         elif event == 7:                # BOMB_DROPPED
-            r += .1
+            r += .0
         elif event == 8:                # BOMB_EXPLODED
             r += 0
         elif event == 9:                # CRATE_DESTROYED
@@ -349,17 +355,17 @@ def reward_update(self):
         elif event == 10:               # COIN_FOUND
             r += 1
         elif event == 11:               # COIN_COLLECTED
-            r += s.reward_coin*10
+            r += s.reward_coin*4/4*2
         elif event == 12:               # KILLED_OPPONENT
-            r += s.reward_kill*10
+            r += s.reward_kill*4/4*2
         elif event == 13:               # KILLED_SELF
-            r -= 50
+            r -= 20/4*2
         elif event == 14:               # GOT_KILLED
-            r -= 25
+            r -= 10/4*2
         elif event == 15:               # OPPONENT_ELIMINATED
             r += 0
         elif event == 16:               # SURVIVED_ROUND
-            r += 10
+            r += 1
 
     self.reward_sum += r
     self.reward_hist.append(r)
@@ -404,12 +410,17 @@ def end_of_episode(self):
             self.logger.debug(f't={t}; n={n}; len(self.reward_hist)-1= {len(self.reward_hist)-1}')
             delta = np.sum([self.gamma**(ti-t-1) * self.reward_hist[ti] for ti in np.arange(t+1,t+n+1,1)])
             delta += self.gamma**n * get_Q(self, self.state_hist[t+n], self.action_hist[t+n]) - get_Q(self, self.state_hist[t], self.action_hist[t]) 
-            self.logger.debug(f'Difference delta(t={t}) = {delta}')
-            self.weights += self.alpha * funcs(self, self.state_hist[t], self.action_hist[t]) * delta
+            upd = self.alpha * funcs(self, self.state_hist[t], self.action_hist[t]) * delta
+            self.logger.debug(f'Difference delta(t={t}) = {delta}, weights + = {upd}')
+            self.weights += upd
             with open(self.out_file_weight,'a') as fd:
                 wr = csv.writer(fd)
                 wr.writerow(self.weights)
 #    else:
+                
+    np.save('agent_code/bla_agent/state_hist', self.state_hist)
+    np.save('agent_code/bla_agent/action_hist', self.action_hist)
+    np.save('agent_code/bla_agent/reward_hist', self.reward_hist)
 
 
     np.save(self.file_weights, self.weights)
@@ -430,6 +441,7 @@ def end_of_episode(self):
     self.reward_sum = 0.                        # sum of rewards per episode, for monitoring
     self.reward_hist = deque([],s.max_steps)    # list of all rewards during current episode
     self.logger.debug('juhuu, no errors!')
+
     
     if self.episode_nr%100 == 0:
         print(f'Episode {self.episode_nr} complete!')

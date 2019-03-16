@@ -110,5 +110,6 @@ screenshots/*.mp4
 screenshots/*.webm
 
 replays/
-
 agent_code/bla_agent/weights.csv
+
+agent_code/bla_agent/out.csv
