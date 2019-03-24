@@ -60,8 +60,7 @@ def setup(self):
     # load weights if possible 
     self.file_weights = 'weights.pkl'
     try:
-        weights = load_weights(self.file_weights)       # load trained weights
-        #weights = torch.load('weights.pt')
+        weights = torch.load('weights.pt')              # load trained weights
         self.logger.debug('Weight file successfully loaded!')
     except:
         weights = None
