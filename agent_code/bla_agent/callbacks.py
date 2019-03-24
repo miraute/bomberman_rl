@@ -34,14 +34,18 @@ def setup(self):
     self.action_hist = deque([],s.max_steps)    # action history, -------"------------
     self.reward_sum = 0.                        # sum of rewards per episode, for monitoring
     self.reward_hist = deque([],s.max_steps)    # list of all rewards during current episode
-    self.out_file_weight = 'agent_code/bla_agent/weights.csv'    # csv-file where weights are appended to after update (step)
-    self.out_file_reward = 'agent_code/bla_agent/out.csv'        # csv-file where reward_sum is appended to after each episode
+    self.out_file_weight = 'weights.csv'    # csv-file where weights are appended to after update (step)
+    self.out_file_reward = 'out.csv'        # csv-file where reward_sum is appended to after each episode
     
-    self.file_weights = 'agent_code/bla_agent/weights.npy'
+    self.file_weights = 'weights.npy'
     self.weights = np.load(self.file_weights)      # load trained weights
+    self.weights_len = 9
     self.gamma = 0.9            # discount factor
-    self.alpha = 0.1            # learning rate for gradient descent SARSA??
-    self.epsilon = 0.05         # for epsilon-greedy action selection
+    self.alpha = 0.001          # learning rate for gradient descent SARSA
+    self.eps_start = 0.0        # for epsilon-greedy action selection   # 0.9
+    self.eps_end = 0.00         # and annealing of epsilon              # 0.05
+    self.eps_decay = 20
+    self.epsilon = self.eps_start
     
     self.last_map = deque([],1)
     self.last_bmap= deque([],1)
@@ -51,95 +55,47 @@ def setup(self):
         self.episode_nr
     except AttributeError:
         self.episode_nr = 0
-        
-    
-def act(self):
-    """Called each game step to determine the agent's next action.
 
-    You can find out about the state of the game environment via self.game_state,
-    which is a dictionary. Consult 'get_state_for_agent' in environment.py to see
-    what it contains.
-
-    Set the action you wish to perform by assigning the relevant string to
-    self.next_action. You can assign to this variable multiple times during
-    your computations. If this method takes longer than the time limit specified
-    in settings.py, execution is interrupted by the game and the current value
-    of self.next_action will be used. The default value is 'WAIT'.
+def get_explosion_xys(start, map, bomb_power=3):
     """
-    self.logger.info('Picking action according to rule set')
+    returns all tiles hit by an explosion starting at start given a 2d map of the game 
+       where walls are indicated by -1        
+    """
+    x, y = start
+    expl = [(x,y)]
+    for i in range(1, bomb_power+1):
+        if map[x+i,y] == -1: break
+        expl.append((x+i,y))
+    for i in range(1, bomb_power+1):
+        if map[x-i,y] == -1: break
+        expl.append((x-i,y))
+    for i in range(1, bomb_power+1):
+        if map[x,y+i] == -1: break
+        expl.append((x,y+i))
+    for i in range(1, bomb_power+1):
+        if map[x,y-i] == -1: break
+        expl.append((x,y-i))
 
-    # Gather information about the game state
-    arena = self.game_state['arena']
-    x, y, _, bombs_left, score = self.game_state['self']
-    self.coordinate_history.append((x,y))
-    bombs = self.game_state['bombs']
-    bomb_xys = [(x,y) for (x,y,t) in bombs]
-    others = [(x,y) for (x,y,n,b,s) in self.game_state['others']]
-#    coins = self.game_state['coins']
-    bomb_map = np.ones(arena.shape) * 5
-    for xb,yb,t in bombs:
-        for (i,j) in [(xb+h, yb) for h in range(-3,4)] + [(xb, yb+h) for h in range(-3,4)]:
-            if (0 < i < bomb_map.shape[0]) and (0 < j < bomb_map.shape[1]):
-                bomb_map[i,j] = min(bomb_map[i,j], t)
-    self.bomb_map = bomb_map
-    self.state = [(self.game_state).copy(), list(self.coordinate_history), bomb_map.copy()] 
-
-    
-    # Check which moves make sense at all
-    directions = [(x,y), (x+1,y), (x-1,y), (x,y+1), (x,y-1)]
-    valid_tiles, valid_actions = [], []
-    for d in directions:
-        if ((arena[d] == 0) and
-            (self.game_state['explosions'][d] <= 1) and
-            (bomb_map[d] > 0) and
-            (not d in others) and
-            (not d in bomb_xys)):
-            valid_tiles.append(d)
-    if (x-1,y) in valid_tiles: valid_actions.append('LEFT')
-    if (x+1,y) in valid_tiles: valid_actions.append('RIGHT')
-    if (x,y-1) in valid_tiles: valid_actions.append('UP')
-    if (x,y+1) in valid_tiles: valid_actions.append('DOWN')
-    if (x,y)   in valid_tiles: valid_actions.append('WAIT')
-    # Disallow the BOMB action if agent dropped a bomb in the same spot recently
-    if (bombs_left > 0) and (x,y) not in self.bomb_history: valid_actions.append('BOMB')
-    self.logger.debug(f'Valid actions: {valid_actions}')
-    
-    if len(valid_actions) == 0:
-        return # we're fucked
-    
-    ### epsilon-greedy action selection:
-    if np.random.rand()>self.epsilon:       # with prob. 1-epsilon choose action that maximizes Q
-        Qs = []
-        for action in valid_actions:
-            Qs.append(get_Q(self, self.state, action))
-            self.logger.debug(f'Q(s,{action})={Qs[-1]}')
-        self.next_action =  valid_actions[np.argmax(Qs)]
-    else:                                   # with prob. epsilon choose random action
-        self.next_action = np.random.choice(valid_actions)
-        
-#    self.action_hist.append(self.next_action)   # save action to queue for learning
-#    self.state_hist.append(self)     # save state  to queue for learning
-        
-######### instead of using self, pass 'state' dict containing self.game_state, bomb_map
-        # within get_Q() (and funcs and calls therein) self may only be used to address static properties
-        # dump 'state' to self.state_hist instead of 'self' object
+    return np.array(expl)
     
 
-### self :    containing the arena as self.game_state['arena'] as well as the positions of bombs and opponents
-### arena:    A 2D numpy array describing the tiles of the game board. Its entries are 1 for crates, 
-###           -1 for stone walls and 0 for free tiles.
-### bomb_map: A 2D numpy array with the same shape as arena containing 5 everywhere except for the tiles
-###             where a bomb is going to explode: there it contains the countdown value
-### start:    tuple of (x,y): the coordinates for the starting position for the search
-### action:   string, 'BOMB' or something else, see inteded use
-#
-### intended use: if we want to check if it is a good idea to drop a bomb (in the sense that we can outrun it)
-###                 - pass our current position as start and action='BOMB'
-###               e.g. if we just dropped a bomb, we can call this function with our options for the next action
-###                 - pass our expected next position as start and action != 'BOMB'
-#
-### return:   bool, True if we can run or hide, else False
 def can_run_or_hide(self, state, start, action='other'):
+    """
+     self :    containing the arena as self.game_state['arena'] as well as the positions of bombs and opponents
+     arena:    A 2D numpy array describing the tiles of the game board. Its entries are 1 for crates, 
+               -1 for stone walls and 0 for free tiles.
+     bomb_map: A 2D numpy array with the same shape as arena containing 5 everywhere except for the tiles
+                 where a bomb is going to explode: there it contains the countdown value
+     start:    tuple of (x,y): the coordinates for the starting position for the search
+     action:   string, 'BOMB' or something else, see inteded use
+    
+     intended use: if we want to check if it is a good idea to drop a bomb (in the sense that we can outrun it)
+                     - pass our current position as start and action='BOMB'
+                   e.g. if we just dropped a bomb, we can call this function with our options for the next action
+                     - pass our expected next position as start and action != 'BOMB'
+    
+     return:   bool, True if we can run or hide, else False
+    """
     game_state,_,bomb_map = state
     if action=='BOMB' and bomb_map[start]==0: # first, check if staying at the same place is an option
         return False
@@ -151,9 +107,6 @@ def can_run_or_hide(self, state, start, action='other'):
         map[o] = -2
     self.last_map.append(map)
     self.last_bmap.append(bomb_map)
-#    # only debug:
-#    np.save('agent_code/bla_agent/map%i'%self.game_state['step'], map)
-#    np.save('agent_code/bla_agent/bmap%i'%self.game_state['step'], bomb_map)
     
     ### init queue
     queue = [start+(0,)]
@@ -179,45 +132,32 @@ def can_run_or_hide(self, state, start, action='other'):
                 pass
     return False                # no more tiles to check and no way out found
 
+
 def distance(pos1, pos2):
     return np.sum(np.square(np.subtract(pos1,pos2)), axis=-1)
 
 
-def get_explosion_xys(start, map, bomb_power=3):
-        x, y = start
-        expl = [(x,y)]
-        for i in range(1, bomb_power+1):
-            if map[x+i,y] == -1: break
-            expl.append((x+i,y))
-        for i in range(1, bomb_power+1):
-            if map[x-i,y] == -1: break
-            expl.append((x-i,y))
-        for i in range(1, bomb_power+1):
-            if map[x,y+i] == -1: break
-            expl.append((x,y+i))
-        for i in range(1, bomb_power+1):
-            if map[x,y-i] == -1: break
-            expl.append((x,y-i))
-
-        return np.array(expl)
-
-
-### contains the coefficient functions that are multplying the weights to (linearly) approximate Q(s,a)
-###     input:  (object) self: needed to infer game state, (string) action
-###     return: (np.array) coefficient array (length: self.weights.shape) 
 def funcs(self, state, action):
+    """
+     contains the coefficient functions that are multplying the weights to (linearly) approximate Q(s,a)
+     input:  (object) self: needed for logging functionality, constants, ...
+             (list) state: containing all infos about current state of the game, (string) action
+     return: (np.array) coefficient array (length: self.weights.shape) 
+    """
     game_state, coordinate_history, bomb_map = state
     arena = game_state['arena']
-    x, y, _, bombs_left, score = game_state['self']
-#    bombs = game_state['bombs']
+    x, y, _, bombs_left, _ = game_state['self']
+
     others = [(x,y) for (x,y,n,b,s) in game_state['others']]
     dict_actions = {'LEFT': (x-1,y), 'RIGHT': (x+1,y), 'UP': (x,y-1), 'DOWN': (x,y+1), 'WAIT': (x,y), 'BOMB':(x,y)}
-    f = np.zeros(self.weights.shape)
+
+    f = np.zeros(self.weights_len)
     crates = [[xi,yi] for xi in range(1,16) for yi in range(1,16) if (arena[xi,yi] == 1)]
     
     me = (x,y)                          # current position
     me_next = dict_actions[action]      # next position after performing action
-    self.me = me
+    
+    self.me = me # only debug
     
     # check if the next step brings us closer to a coin
     coins = np.array(game_state['coins'])
@@ -225,19 +165,17 @@ def funcs(self, state, action):
         dist = np.min(distance(me, coins))
         dist_next = np.min(distance(me_next, coins))
         f[0] = .2*np.sign(dist-dist_next)
-        f[9] = 1./max(dist,1)   # avoid division by zero
-        
-    
+        f[8] = 1./max(dist,1)   # avoid division by zero
+            
     # when in doubt: rather do something than nothing
-    f[1] = -.2 if action=='WAIT' or action=='BOMB' else 0
+    if action=='WAIT':
+        f[1] = -.2
+    elif action=='BOMB':
+        f[1] = +.1
     
-    #try not to stay on one place
-    self.logger.debug(f'me={me},me_next={me_next},coord_hist={coordinate_history}')
+    #try not to stay in one place
     if me_next in list(coordinate_history):
         f[2] = -1*(1. - list(coordinate_history)[::-1].index(me_next)/len(coordinate_history))
-        #self.logger.debug(f'found me_next in coordinate_history at pos. {list(coordinate_history)[::-1].index(me_next)}')
-    else: 
-        f[2] = 0.
     
     # check if the next step brings us closer to a crate
     if len(crates) != 0:
@@ -248,79 +186,124 @@ def funcs(self, state, action):
     # it might be a good idea to drop a bomb if many crates would be destroyed
     if action == 'BOMB' and len(crates) != 0:
         expl_x,expl_y = get_explosion_xys(me, arena, s.bomb_power).T    # get coordinates of explosion for bomb dropped at (me)
-        f[4] = .02 * len(np.where(arena[expl_x,expl_y]==1)[0])           # for each crate that would be destroyed, reward 0.2
-        
+        f[4] = 5*.02 * len(np.where(arena[expl_x,expl_y]==1)[0])           # for each crate that would be destroyed, reward 0.2
+        if len(others) == 0:
+            f[4]*=10
     # RUN FORREST RUN!
-    if bomb_map [me_next] == 0:
-        f[5]=-.5
+    #if bomb_map [me_next] == 0:
+    #    f[5]=-.5
                 
-    # check if dead end
     
     # check if possible to escape when dropping a bomb
     if action=='BOMB':
-        f[6] = can_run_or_hide(self, state, me, action) - 0.5
+        f[5] = can_run_or_hide(self, state, me, action) - 0.5
     else:
-        f[6] = can_run_or_hide(self, state, me_next) - 0.5
+        f[5] = can_run_or_hide(self, state, me_next) - 0.5
     #self.logger.debug(f'me={me},me_next={me_next}')
     
     # check if there is an opponent in our vicinity
     if len(others) > 0:
         dist_opp = np.min(distance(me,np.array(others)))
         if dist_opp < 5:
-            f[7] = 1-0.2*dist_opp
+            f[6] = 1-0.2*dist_opp
     
     
     if action == 'BOMB' and len(others) > 0:
         for p in list(dict_actions.values()):
             if p in others:
-                f[8] += 0.5
+                f[7] += 0.5
         for p in [(min(x+2,16),y), (max(x-2,0),y),(x,min(y+2,16)),(x,max(y-2,0)),(x+1,y+1),(x+1,y-1),(x-1,y+1),(x+1,y-1)]:
             if p in others:
-                f[8] += 0.25
+                f[7] += 0.25
     
     ## higher order correclations:
-    
+    f_two_point=[]
+    for i in range(self.weights_len):
+        for j in range(i):
+            f_two_point.append(0.1*f[i]*f[j])
+    f = np.append(f,f_two_point)
 
     self.logger.debug(f'f={f}')
     return f
-                
-    
-    
-#    # check if we are on a bomb:
-#    f1 = False
-#    for bomb in bomb_xys:
-#        if bomb == (x,y):
-#            f1=True
-#            break
-#    
-#    # check whether we run into an explosion
-#    f2 = False
-#    for bomb in bombs:
-#        if bomb == dict_actions(action)+(1,):
-#            f2=True
-    
-    # check whether we would hit a coin
-    
-    #check if we are next to a crate
-    
-    #check if we are next to an opponent
 
-### returns the state-action value Q given a state (included in self) and a (proposed) action
-###     the actual calcultaion is done in funcs(),
-###     here only the scalar product with the learned weights self.weights is computed
+
 def get_Q(self, state, action):
+    """
+    returns the state-action value Q given a state and a (proposed) action
+    using the coefficient functions computed in funcs(),
+    here only the scalar product with the learned weights self.weights is computed    
+    """
     return np.dot(self.weights, funcs(self, state, action))
+
+        
+def act(self):
+    """Called each game step to determine the agent's next action.
+
+    - prepare 'state' variable [game_state, coordinate_history, bomb_map]
+    - determine valid actions
+    - use \epsilon-greedy policy to determine next action
+          (by calculating Q(s,a) for every valid action a)
+    """
+    self.logger.info('Picking action according to rule set')
+
+    # Gather information about the game state
+    arena = self.game_state['arena']                                # map
+    x, y, _, bombs_left, _ = self.game_state['self']                # our coordinates
+    bomb_xys = [(x,y) for (x,y,t) in self.game_state['bombs']]      # bomb coordinates
+    others = [(x,y) for (x,y,n,b,s) in self.game_state['others']]   # other agents' coordinates
+
+    # compute a 'bomb map' indicating when and where there will be an explosion on each tile
+    bomb_map = np.ones(arena.shape) * 5
+    for xb,yb,t in self.game_state['bombs']:
+        for (i,j) in get_explosion_xys((xb,yb),arena):
+            bomb_map[i,j] = min(bomb_map[i,j], t)
+            
+    # bundle in state variable
+    self.coordinate_history.append((x,y))
+    self.state = [(self.game_state).copy(), list(self.coordinate_history), bomb_map.copy()] 
+
+    
+    # determine valid actions
+    directions = [(x,y), (x+1,y), (x-1,y), (x,y+1), (x,y-1)]
+    valid_tiles, valid_actions = [], []
+    for d in directions:
+        if ((arena[d] == 0) and
+            (self.game_state['explosions'][d] <= 1) and
+            (bomb_map[d] > 0) and
+            (not d in others) and
+            (not d in bomb_xys)):
+            valid_tiles.append(d)
+    if (x-1,y) in valid_tiles: valid_actions.append('LEFT')
+    if (x+1,y) in valid_tiles: valid_actions.append('RIGHT')
+    if (x,y-1) in valid_tiles: valid_actions.append('UP')
+    if (x,y+1) in valid_tiles: valid_actions.append('DOWN')
+    if (x,y)   in valid_tiles: valid_actions.append('WAIT')
+    # Disallow the BOMB action if agent dropped a bomb in the same spot recently
+    if (bombs_left > 0) and (x,y) not in self.bomb_history: valid_actions.append('BOMB')
+    self.logger.debug(f'Valid actions: {valid_actions}')
+    
+    if len(valid_actions) == 0:
+        return # there's not much to think about
+    
+    ### epsilon-greedy action selection:
+    if np.random.rand()>self.epsilon:       # with prob. 1-epsilon choose action that maximizes Q
+        Qs = []
+        for action in valid_actions:
+            Qs.append(get_Q(self, self.state, action))
+            self.logger.debug(f'Q(s,{action})={Qs[-1]}')
+        self.next_action =  valid_actions[np.argmax(Qs)]
+    else:                                   # with prob. epsilon choose random action
+        self.next_action = np.random.choice(valid_actions)
     
 
 
 def reward_update(self):
     """Called once per step to allow intermediate rewards based on game events.
 
-    When this method is called, self.events will contain a list of all game
-    events relevant to your agent that occured during the previous step. Consult
-    settings.py to see what events are tracked. You can hand out rewards to your
-    agent based on these events and your knowledge of the (new) game state. In
-    contrast to act, this method has no time limit.
+    - calculate rewards based on observed game events
+    - store all relevant quantities for learning (i.e. state, action and reward)
+    - if SARSA update after every step is enabled (self.update == move): perform SARSA update
+    
     """
     self.logger.debug(f'Encountered {len(self.events)} game event(s)')
 
@@ -353,24 +336,25 @@ def reward_update(self):
         elif event == 9:                # CRATE_DESTROYED
             r += .5
         elif event == 10:               # COIN_FOUND
-            r += 1
+            r += .5
         elif event == 11:               # COIN_COLLECTED
-            r += s.reward_coin*4/4*2
+            r += s.reward_coin*2
         elif event == 12:               # KILLED_OPPONENT
-            r += s.reward_kill*4/4*2
+            r += s.reward_kill*2
         elif event == 13:               # KILLED_SELF
-            r -= 20/4*2
+            r -= 5
         elif event == 14:               # GOT_KILLED
-            r -= 10/4*2
+            r -= 10
         elif event == 15:               # OPPONENT_ELIMINATED
             r += 0
         elif event == 16:               # SURVIVED_ROUND
-            r += 1
+            r += 0
 
-    self.reward_sum += r
-    self.reward_hist.append(r)
+    self.reward_sum += r        # only for monitoring
+    
+    self.reward_hist.append(r)                  # save reward to queue for learning
     self.action_hist.append(self.next_action)   # save action to queue for learning
-    self.state_hist.append(self.state)     # save state  to queue for learning
+    self.state_hist.append(self.state)          # save state  to queue for learning
     
     self.logger.debug(f'Reward r = {r}')
 
@@ -387,14 +371,16 @@ def reward_update(self):
             wr.writerow(self.weights)
         
         self.logger.debug(self.weights)
-    ### todo: multi-step learning
     
 def end_of_episode(self):
     """Called at the end of each game to hand out final rewards and do training.
 
-    This is similar to reward_update, except it is only called at the end of a
-    game. self.events will contain all events that occured during your agent's
-    final step. You should place your actual learning code in this method.
+    - perform n-step SARSA learning (if self.update is an integer which in this case is interpreted as n)
+    - save updated weights to disk
+    - save data for monitoring and debugging
+    - update episode counter and anneal epsilon
+    - reset queues and variables for next episode
+    
     """
     self.logger.debug(f'Encountered {len(self.events)} game event(s) in final step of episode {self.episode_nr}')
     reward_update(self)    
@@ -416,13 +402,13 @@ def end_of_episode(self):
             with open(self.out_file_weight,'a') as fd:
                 wr = csv.writer(fd)
                 wr.writerow(self.weights)
-#    else:
-                
-    np.save('agent_code/bla_agent/state_hist', self.state_hist)
-    np.save('agent_code/bla_agent/action_hist', self.action_hist)
-    np.save('agent_code/bla_agent/reward_hist', self.reward_hist)
+    
+    # only debug       
+#    np.save('state_hist', self.state_hist)
+#    np.save('action_hist', self.action_hist)
+#    np.save('reward_hist', self.reward_hist)
 
-
+    # save weights and monitoring data
     np.save(self.file_weights, self.weights)
     with open(self.out_file_reward,'a') as fd:
         wr = csv.writer(fd)
@@ -432,7 +418,8 @@ def end_of_episode(self):
     self.episode_nr += 1
     
     # anneal epsilon
-    self.epsilon /= self.episode_nr**0.05
+    self.epsilon = self.eps_end + (self.eps_start - self.eps_end) * np.exp(-1.*self.episode_nr / self.eps_decay)
+    self.logger.debug(f'after episode {self.episode_nr}: epsilon = {self.epsilon}')
     
     self.bomb_history = deque([], 5)
     self.coordinate_history = deque([], 20)
@@ -442,6 +429,6 @@ def end_of_episode(self):
     self.reward_hist = deque([],s.max_steps)    # list of all rewards during current episode
     self.logger.debug('juhuu, no errors!')
 
-    
+    # show learning progress during long sessions
     if self.episode_nr%100 == 0:
         print(f'Episode {self.episode_nr} complete!')
